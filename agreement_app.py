@@ -8,7 +8,7 @@ from PIL import Image
 
 APP_KEY = st.secrets['DROPBOX_APP_KEY']
 APP_SECRET = st.secrets['DROPBOX_APP_SECRET']
-REDIRECT_URI = 'https://localhost'          # TODO
+REDIRECT_URI = 'https://mep-agreement.streamlit.app/'
 
 DROPBOX_AUTH_URL = (f"https://www.dropbox.com/oauth2/authorize?client_id={APP_KEY}"
         f"&response_type=code&redirect_uri={REDIRECT_URI}"
