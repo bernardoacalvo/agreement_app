@@ -213,7 +213,7 @@ def dropbox_load_image(path):
 
 def auth_page():
     st.title("Dropbox Authentication")
-    st.markdown(f'<a href="{DROPBOX_AUTH_URL}" target="_self">Click here to authorize the app with Dropbox</a>', unsafe_allow_html=True)
+    st.markdown(f'<a href="{DROPBOX_AUTH_URL}" target="_blank">Click here to authorize the app with Dropbox</a>', unsafe_allow_html=True)
     st.write("Please check the URL and copy the code after 'code='.")
     st.text_input("Paste the authorization code here and click on the button.", key="auth_code")
     st.button("Submit Authorization Code", on_click=authenticate_dropbox, use_container_width=True, type='primary')
