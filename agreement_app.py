@@ -9,16 +9,13 @@ from PIL import Image
 
 APP_KEY = st.secrets['DROPBOX_APP_KEY']
 APP_SECRET = st.secrets['DROPBOX_APP_SECRET']
-REDIRECT_URI = 'https://mep-agreement.streamlit.app/'
-
-DROPBOX_AUTH_URL = (f"https://www.dropbox.com/oauth2/authorize?client_id={APP_KEY}"
-        f"&response_type=code&redirect_uri={REDIRECT_URI}"
-        "&token_access_type=offline")
+REFRESH_TOKEN = st.secrets['DROPBOX_APP_REFRESH_TOKEN']
+TOKEN_URL = "https://api.dropboxapi.com/oauth2/token"
 
 RESULTS_PATH = "/{}.json"
 
 if 'page' not in st.session_state:
-    st.session_state.page = 'auth'
+    st.session_state.page = 'main'
 if 'current_evaluator' not in st.session_state:
     st.session_state.current_evaluator = None
 if 'evaluator_samples' not in st.session_state:
@@ -33,69 +30,45 @@ if 'similar_response' not in st.session_state:
     st.session_state.similar_response = None
 if 'dbx' not in st.session_state:
     st.session_state.dbx = None
-if 'auth_code' not in st.session_state:
-    st.session_state.auth_code = None
-if 'refresh_token' not in st.session_state:
-    st.session_state.refresh_token = None
 
 
-def fetch_tokens(auth_code):
-    token_url = "https://api.dropboxapi.com/oauth2/token"
-    data = {
-        "code": auth_code,
-        "grant_type": "authorization_code",
-        "client_id": APP_KEY,
-        "client_secret": APP_SECRET,
-        "redirect_uri": REDIRECT_URI,
-    }
-    response = requests.post(token_url, data=data)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        st.error("Failed to authenticate. Please check your authorization code.")
-        return None
-
-def refresh_access_token(refresh_token):
-    token_url = "https://api.dropboxapi.com/oauth2/token"
+def refresh_access_token():
     data = {
         "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
+        "refresh_token": REFRESH_TOKEN,
         "client_id": APP_KEY,
         "client_secret": APP_SECRET,
     }
-    response = requests.post(token_url, data=data)
+    response = requests.post(TOKEN_URL, data=data)
     if response.status_code == 200:
-        return response.json()
+        new_tokens = response.json()
+        new_access_token = new_tokens.get("access_token")
+        st.toast("Access token refreshed successfully.")
+        return new_access_token
     else:
-        st.error("Failed to refresh token.")
+        st.error("Failed to refresh access token.")
         return None
-    
-def authenticate_dropbox():
-    if st.session_state.auth_code:
-        tokens = fetch_tokens(st.session_state.auth_code)
-        if tokens:
-            access_token = tokens.get('access_token')
-            st.session_state.refresh_token = tokens.get('refresh_token')
+
+def validate_token():
+    try:
+        st.session_state.dbx.users_get_current_account()
+    except dropbox.exceptions.AuthError:
+        # token expired
+        access_token = refresh_access_token()
+        if access_token:
+            st.session_state.access_token = access_token
             st.session_state.dbx = dropbox.Dropbox(access_token)
-            st.session_state.page = 'main'
-    else:
-        st.error("Please insert a code.")
+        else:
+            st.error("Could not refresh the token. Manual intervention required.")
 
-def refresh_token():
-    if st.session_state.refresh_token:
-        tokens = refresh_access_token(st.session_state.refresh_token)
-        if tokens:
-            st.session_state.dbx = dropbox.Dropbox(tokens.get('access_token'))
-
-def handle_token():
-    if st.session_state.dbx:
-        try: 
-            st.session_state.dbx.users_get_current_account()
-        except dropbox.exceptions.AuthError:
-            refresh_token()
+def handle_dropbox_access_token():
+    if 'access_token' not in st.session_state:
+        st.session_state.access_token = refresh_access_token()
+        st.session_state.dbx = dropbox.Dropbox(st.session_state.access_token)
+    validate_token()
 
 
-handle_token()                  # check if access token needs to be refreshed
+handle_dropbox_access_token()
 
 def load_json_from_dropbox(path):
     try:
@@ -198,15 +171,6 @@ def dropbox_load_image(path):
 
 # ----- pages -----
 
-def auth_page():
-    st.title("Dropbox Authentication")
-    st.markdown(f'<a href="{DROPBOX_AUTH_URL}" target="_blank">Click here to authorize the app with Dropbox</a>', unsafe_allow_html=True)
-    st.write("Please check the URL and copy the code after 'code='.")
-    st.text_input("Paste the authorization code here and click on the button.", key="auth_code")
-    st.button("Submit Authorization Code", on_click=authenticate_dropbox, use_container_width=True, type='primary')
-    st.write("**Note:** If you refresh the page, you may need a new authorization code.")
-
-
 def main_page():
     st.empty()
     st.title("MEP Evaluation Dashboard")
@@ -230,7 +194,7 @@ def instructions_page():
                  " The prediction represents the text generated by a model, and the ground truth pertains to events, locations, or dates present in the caption."
                  " Your task it to assess whether the prediction is semantically similar to the ground truth."
                  " Be restrict, however, if the prediction and ground truth differ in format they should be considered similar if they refer to the same entity."
-                 " The expected time for this evaluation is between 20 and 30 minutes. Some examples:")
+                 " The expected time for this evaluation is between 5 and 15 minutes. Some examples:")
         st.markdown("<hr>", unsafe_allow_html=True)
         st.write("**EVENT**")
         st.markdown("<p style='font-size:24px;'>Mikel Astarloza crosses the finish line to win the 16th stage of the Tour de France</p>", unsafe_allow_html=True)
@@ -254,7 +218,7 @@ def instructions_page():
                  " The prediction represents the text generated by a model, and the ground truth pertains to locations (cities or countries) derived from the caption."
                  " Your task it to assess whether the location prediction is semantically similar to the ground truth."
                  " Be restrict, however, if the prediction and ground truth differ in format they should be considered similar if they refer to the same entity."
-                 " The expected time for this evaluation is between 10 and 15 minutes. Some examples:")
+                 " The expected time for this evaluation is between 5 and 15 minutes. Some examples:")
         st.markdown("<hr>", unsafe_allow_html=True)
         st.write("**CITY**")
         st.markdown("<p style='font-size:24px;'>Kate stopped at a table of toquetopped kids during a visit to a Taste of British Columbia festival at the Mission Hill Winery in Kelowna BC</p>", unsafe_allow_html=True)
@@ -322,7 +286,7 @@ def end_page():
     success = save_results(evaluation_id, st.session_state.results)
     st.write("Thank you for completing the evaluation and contributing to my work :).")
     if success:
-        st.write("Your responses have been recorded.")
+        st.write("Your responses have been saved.")
     else:
         st.write("Something went wrong!")
         st.write("Copy the following JSON and send it to Bernardo. Thanks.")
@@ -334,9 +298,7 @@ def end_page():
     st.button("Back to Dashboard", on_click=set_page, args=('main',), use_container_width=True, type='primary')
 
 def main():
-    if st.session_state.page == 'auth':
-        auth_page()
-    elif st.session_state.page == 'main':
+    if st.session_state.page == 'main':
         main_page()
     elif st.session_state.page == 'instructions':
         instructions_page()
