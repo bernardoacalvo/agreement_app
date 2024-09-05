@@ -1,3 +1,4 @@
+import random
 import streamlit as st
 import json
 import dropbox
@@ -15,20 +16,21 @@ DROPBOX_AUTH_URL = (f"https://www.dropbox.com/oauth2/authorize?client_id={APP_KE
         "&token_access_type=offline")
 
 RESULTS_PATH = "/{}.json"
-CONTENT_TIME_EVALUATORS = ['bernardo', 'david', 'eric']
 
 if 'page' not in st.session_state:
     st.session_state.page = 'auth'
 if 'current_evaluator' not in st.session_state:
     st.session_state.current_evaluator = None
+if 'evaluator_samples' not in st.session_state:
+    st.session_state.evaluator_samples = []
+if 'curr_samples' not in st.session_state:
+    st.session_state.curr_samples = {}
 if 'step' not in st.session_state:
     st.session_state.step = 0
 if 'results' not in st.session_state:
     st.session_state.results = {}
 if 'similar_response' not in st.session_state:
     st.session_state.similar_response = None
-if 'article_response' not in st.session_state:
-    st.session_state.article_response = None
 if 'dbx' not in st.session_state:
     st.session_state.dbx = None
 if 'auth_code' not in st.session_state:
@@ -122,53 +124,39 @@ def set_page(page):
 def start_evaluation(evaluator, is_general, total_samples):
     st.session_state.current_evaluator = evaluator
     st.session_state.eval_type = 'general' if is_general else 'granularity'
+    evaluator_samples = general_evaluators_samples.get(evaluator, []) if is_general else granularity_evaluators_samples.get(evaluator, [])
+    random.seed(42)
+    random.shuffle(evaluator_samples)
+    st.session_state.evaluator_samples = evaluator_samples
+    st.session_state.curr_samples = general_samples if is_general else granularity_samples
     st.session_state.step = 0
     st.session_state.results = {}
     st.session_state.total_steps = total_samples
     st.session_state.page = 'instructions'
 
 def get_evaluation_step(evaluator_id, eval_type, step):
-    if eval_type == 'general':
-        evaluator_samples = general_evaluators_samples.get(evaluator_id, [])
-        samples = general_samples
-    else:       # granularity
-        evaluator_samples = granularity_evaluators_samples.get(evaluator_id, [])
-        samples = granularity_samples
-
-    sample_id = evaluator_samples[step]
-    sample_data = samples[sample_id]
-
+    sample_id = st.session_state.evaluator_samples[step]
+    sample_data = st.session_state.curr_samples[sample_id]
     return {
         'sample_id': sample_id,
         'text': sample_data[0],
         'key': sample_data[1],
         'image_path': sample_data[2] if evaluator_id in evaluators_images[eval_type] else None,
         'ground_truth': sample_data[3],
-        'article': sample_data[4] if evaluator_id in CONTENT_TIME_EVALUATORS else None,
-        'prediction': sample_data[6],
+        #'article': sample_data[4],
+        'prediction': sample_data[5],
     }
 
 def set_similar_response(response, sample_id):
     st.session_state.similar_response = response
-    check_and_proceed(sample_id)
-
-def set_article_response(response, sample_id):
-    st.session_state.article_response = response
-    check_and_proceed(sample_id)
-
-def check_and_proceed(sample_id):
-    if st.session_state.similar_response is not None and (
-            st.session_state.current_evaluator not in CONTENT_TIME_EVALUATORS or st.session_state.article_response is not None):
-        next_step(sample_id)
+    next_step(sample_id)
 
 def next_step(sample_id):
     st.session_state.results[sample_id] = {
         'similar_response': st.session_state.similar_response,
-        'article_response': st.session_state.article_response
     }
 
     st.session_state.similar_response = None
-    st.session_state.article_response = None
 
     if st.session_state.step + 1 < st.session_state.total_steps:
         st.session_state.step += 1
@@ -199,7 +187,6 @@ def dropbox_file_exists(path):
     except Exception:
         return False
 
-@st.cache_data
 def dropbox_load_image(path):
     try:
         metadata, res = st.session_state.dbx.files_download(path)
@@ -282,10 +269,6 @@ def instructions_page():
         st.write("**In this case, we would consider it NOT SIMILAR because, although England is in the UK, the event happened in Glasgow, Scotland, not England. Either Scotland or UK as prediction would be considered SIMILAR.**")
         st.write("**Note: If the ground truth is a country, and the prediction is a city in that country, that is considered NOT SIMILAR because, both need to at least refer to the same granularity level.**")
 
-    if st.session_state.current_evaluator in CONTENT_TIME_EVALUATORS:
-        st.markdown("<hr>", unsafe_allow_html=True)
-        st.write("**CONTENT TIME EVALUATION**")
-        st.write("Additionally, given the article link or, if unavailable, the article text itself, determine whether the news **CONTENT** refers to an OLD NEWS article, or RECENT NEWS article, or DON'T KNOW if can not be determined.")
     st.button("Start Evaluation", on_click=set_page, args=('evaluation',), use_container_width=True, type="primary")
 
 
@@ -300,7 +283,9 @@ def evaluation_page():
 
     image_path = step["image_path"]
     if image_path:
-        st.image(dropbox_load_image(image_path.lstrip(".")))
+        image = dropbox_load_image(image_path.lstrip("."))
+        st.image(image)
+        del image
 
     ground_truth = step['ground_truth']
     text = step['text']
@@ -331,29 +316,6 @@ def evaluation_page():
     with col2:
         st.button("Similar", on_click=set_similar_response, args=(True, sample_id), key="similar_button", use_container_width=True)
 
-    # Content scope evaluation (only for some evaluators)
-    key = step['key']
-    if curr_evaluator_id in CONTENT_TIME_EVALUATORS and key != 'DATE':
-        st.markdown("<hr>", unsafe_allow_html=True)
-        st.markdown("<p style='font-size:24px;'><strong>Article:</strong></p>", unsafe_allow_html=True)
-        article = step['article']
-        if ".com" in article:
-            st.markdown(f"<p style='font-size:18px;'><a href='{article}'>{article}</a></p>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<p style='font-size:18px;'>{article}</p>", unsafe_allow_html=True)
-
-        col3, col4, col5 = st.columns(3)
-        is_recent_events_source = int(sample_id.split("_")[0]) == 4
-        with col3:
-            add_text = "before 2024" if is_recent_events_source else "before 2017"
-            st.button(f"Old News ({add_text})", on_click=set_article_response, args=(0, sample_id), key="old_news_button", use_container_width=True)
-        with col4:
-            st.button("Don't Know", on_click=set_article_response, args=(1, sample_id), key="dont_know_button", use_container_width=True)
-        with col5:
-            add_text = "after 2024 incl." if is_recent_events_source else "after 2017 incl."
-            st.button(f"Recent News ({add_text})", on_click=set_article_response, args=(2, sample_id), key="recent_news_button", use_container_width=True)
-
-
 def end_page():
     st.title("Evaluation Complete")
     evaluation_id = st.session_state.current_evaluator + '_' + st.session_state.eval_type
@@ -365,6 +327,10 @@ def end_page():
         st.write("Something went wrong!")
         st.write("Copy the following JSON and send it to Bernardo. Thanks.")
         st.write(st.session_state.results)
+    # clear memory
+    for key in ['evaluator_samples', 'curr_samples', 'results']:
+        if key in st.session_state:
+            del st.session_state[key]
     st.button("Back to Dashboard", on_click=set_page, args=('main',), use_container_width=True, type='primary')
 
 def main():
